@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-export default function RecordingControls({ isRecording, onStart, onStop }) {
+export default function RecordingControls({ isRecording, disabled, onStart, onStop }) {
   const [elapsed, setElapsed] = useState(0);
   const intervalRef = useRef(null);
 
@@ -34,15 +34,17 @@ export default function RecordingControls({ isRecording, onStart, onStop }) {
       </div>
       <button
         onClick={isRecording ? onStop : onStart}
+        disabled={disabled && !isRecording}
         style={{
           padding: '14px 40px',
           fontSize: '18px',
           borderRadius: '50px',
           border: 'none',
-          background: isRecording ? '#444' : '#ff4444',
+          background: isRecording ? '#444' : (disabled ? '#666' : '#ff4444'),
           color: '#fff',
-          cursor: 'pointer',
+          cursor: disabled && !isRecording ? 'not-allowed' : 'pointer',
           marginTop: '8px',
+          opacity: disabled && !isRecording ? 0.5 : 1,
         }}
       >
         {isRecording ? '녹음 중지' : '녹음 시작'}

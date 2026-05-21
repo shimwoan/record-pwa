@@ -85,15 +85,28 @@ export default function App() {
     }
     // [Critical Fix #3] iOS: AudioContext는 user gesture frame 안에서 동기적으로 생성해야 함.
     // await 이전에 호출해야 gesture 타이머 만료 전에 unlock됨.
+    // gesture frame 안에서 동기 호출 (iOS AudioContext unlock)
     initAudioContext();
-    // 마이크 권한 팝업을 먼저 띄움 — 허용하면 recorder.start()에서 재사용됨
+
+    // gesture frame 안에서 첫 번째 await — transient activation 소진 전에 권한 팝업 띄움
+    // 획득한 stream을 recorder에 그대로 넘겨 AVAudioSession 이중 초기화 방지
+    let stream;
     try {
-      const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      testStream.getTracks().forEach((t) => t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         addEvent('마이크 권한이 거부되었습니다', true);
-        addEvent('iPhone 설정 → Safari → 마이크 → 허용 후 다시 시도', true);
+        if (window.matchMedia('(display-mode: standalone)').matches) {
+          addEvent('iPhone 설정 → 앱 이름 → 마이크 → 허용 후 다시 시도', true);
+        } else {
+          addEvent('iPhone 설정 → Safari → 마이크 → 허용 후 다시 시도', true);
+        }
+      } else if (err.name === 'SecurityError') {
+        addEvent('보안 오류: HTTPS에서 실행해야 마이크를 사용할 수 있습니다', true);
+      } else if (err.name === 'NotReadableError') {
+        addEvent('마이크가 다른 앱에서 사용 중입니다. 다른 앱 종료 후 다시 시도하세요', true);
+      } else if (err.name === 'AbortError') {
+        addEvent('마이크 접근이 중단되었습니다. 다시 시도하세요', true);
       } else if (err.name === 'NotFoundError') {
         addEvent('마이크를 찾을 수 없습니다', true);
       } else {
@@ -101,14 +114,16 @@ export default function App() {
       }
       return;
     }
+
     try {
       setEvents([]);
       setStatus((s) => ({ ...s, chunkCount: 0, totalBytes: 0 }));
       const recorder = new Recorder(handleEvent);
       recorderRef.current = recorder;
-      await recorder.start();
+      await recorder.start(stream);
       setIsRecording(true);
     } catch (err) {
+      stream.getTracks().forEach((t) => t.stop());
       addEvent('시작 실패: ' + err.message, true);
     }
   };
@@ -122,12 +137,14 @@ export default function App() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        // [Important Fix #5] iOS는 audio/mp4 컨테이너를 사용하므로 확장자 맞춤
         const ext = (recorderRef.current?.mimeType || blob.type).includes('mp4') ? 'mp4' : 'webm';
         a.download = `recording-${Date.now()}.${ext}`;
+        // iOS Safari는 DOM에 append해야 download 속성이 동작함
+        document.body.appendChild(a);
         a.click();
-        // [Important Fix #6] iOS Safari는 click() 후 비동기로 다운로드 시작 — 즉시 revoke하면 실패
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        document.body.removeChild(a);
+        // iOS는 파일 저장 다이얼로그가 비동기 — URL을 5초간 유지
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
       }
     } catch (err) {
       addEvent('중지 실패: ' + err.message, true);
@@ -145,6 +162,7 @@ export default function App() {
       )}
       <RecordingControls
         isRecording={isRecording}
+        disabled={insecureContext}
         onStart={handleStart}
         onStop={handleStop}
       />

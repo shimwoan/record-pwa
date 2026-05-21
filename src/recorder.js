@@ -91,18 +91,14 @@ export class Recorder {
     this._wakeLockReleaseHandler = null;
   }
 
-  async start() {
+  // stream을 외부에서 받아 AVAudioSession 이중 초기화(click artifact) 방지
+  async start(stream) {
     if (this.mediaRecorder) throw new Error('Already recording');
-
-    // [Critical Fix #3] initAudioContext()는 App.jsx에서 gesture frame 안에서 이미 호출됨.
-    // 여기서 중복 호출 제거.
 
     this.db = await openDB();
     await clearChunks(this.db);
     this.chunkCount = 0;
     this.totalBytes = 0;
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : 'audio/mp4';
