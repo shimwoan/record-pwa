@@ -80,12 +80,12 @@ export default function App() {
       return;
     }
     try {
+      setEvents([]);
+      setStatus((s) => ({ ...s, chunkCount: 0, totalBytes: 0 }));
       const recorder = new Recorder(handleEvent);
       recorderRef.current = recorder;
       await recorder.start();
       setIsRecording(true);
-      setStatus((s) => ({ ...s, chunkCount: 0, totalBytes: 0 }));
-      setEvents([]);
     } catch (err) {
       addEvent('시작 실패: ' + err.message, true);
     }
