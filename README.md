@@ -1,16 +1,36 @@
-# React + Vite
+# PWA 녹음 안정성 테스트 앱
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+iPhone PWA에서 장시간 녹음 안정성을 측정하는 데모앱.
 
-Currently, two official plugins are available:
+## 실행 방법
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### 개발 서버 (로컬)
+```
+npm install
+npm run dev
+```
+http://localhost:5173 에서 확인
 
-## React Compiler
+### iPhone 테스트
+같은 Wi-Fi에서:
+```
+npm run dev -- --host
+```
+출력된 `Network: http://192.168.x.x:5173` 주소를 iPhone Safari에서 열기
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+**PWA 설치:** Safari 공유버튼(□↑) → "홈 화면에 추가" → 홈에서 실행
 
-## Expanding the ESLint configuration
+## 테스트 시나리오
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+| 시나리오 | 기대 결과 |
+|---|---|
+| 화면 켜둔 채 10분+ 녹음 | chunk 계속 저장, Wake Lock 활성 |
+| 홈버튼 누름 | 비프음 + "백그라운드 진입" 로그 |
+| 앱 복귀 | "화면 복귀" + Wake Lock 재획득 |
+| 전원버튼 잠금 | 비프음 + Wake Lock 해제 로그 |
+| 녹음 중지 | webm 파일 자동 다운로드 |
+
+## 주의사항
+- 녹음 중 화면을 끄거나 다른 앱으로 전환하지 마세요
+- iOS Safari에서는 홈버튼/전원버튼으로 앱이 중단될 수 있습니다
+- 데이터는 IndexedDB에 5초 단위로 저장됩니다
