@@ -44,7 +44,8 @@ async function clearChunks(db) {
 // AudioContext — iOS는 사용자 탭 시점에 생성해야 함
 let audioCtx = null;
 
-export function initAudioContext() {
+export async function initAudioContext() {
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   // iOS 허용 등록용 무음 재생
   const buf = audioCtx.createBuffer(1, 1, 22050);
@@ -52,12 +53,15 @@ export function initAudioContext() {
   src.buffer = buf;
   src.connect(audioCtx.destination);
   src.start(0);
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
 }
 
 export function playBeep() {
   if (!audioCtx) return;
   const gain = audioCtx.createGain();
-  gain.gain.value = 0.8;
+  gain.gain.value = 0.4;
   gain.connect(audioCtx.destination);
 
   [880, 1760].forEach((freq) => {
@@ -73,42 +77,51 @@ export function playBeep() {
 export class Recorder {
   constructor(onEvent) {
     // onEvent(type, payload) — App에서 상태 업데이트에 사용
-    this.onEvent = onEvent;
+    this.onEvent = onEvent ?? (() => {});
     this.db = null;
     this.mediaRecorder = null;
+    this.mimeType = null;
     this.wakeLock = null;
     this.chunkCount = 0;
     this.totalBytes = 0;
+    this._lastSave = Promise.resolve();
     this._visibilityHandler = null;
     this._wakeLockReleaseHandler = null;
   }
 
   async start() {
+    if (this.mediaRecorder) throw new Error('Already recording');
+
     this.db = await openDB();
     await clearChunks(this.db);
     this.chunkCount = 0;
     this.totalBytes = 0;
 
-    initAudioContext();
+    await initAudioContext();
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    this.mediaRecorder = new MediaRecorder(stream);
+    this.mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/mp4';
+    this.mediaRecorder = new MediaRecorder(stream, { mimeType: this.mimeType });
 
     this.mediaRecorder.ondataavailable = async (e) => {
       if (e.data.size === 0) return;
-      try {
-        await saveChunk(this.db, e.data);
-        this.chunkCount++;
-        this.totalBytes += e.data.size;
-        this.onEvent('chunk', { count: this.chunkCount, totalBytes: this.totalBytes });
-      } catch (err) {
-        this.onEvent('error', { message: 'IndexedDB 저장 실패: ' + err.message });
-        playBeep();
-      }
+      this._lastSave = (async () => {
+        try {
+          await saveChunk(this.db, e.data);
+          this.chunkCount++;
+          this.totalBytes += e.data.size;
+          this.onEvent('chunk', { count: this.chunkCount, totalBytes: this.totalBytes });
+        } catch (err) {
+          this.onEvent('error', { message: 'IndexedDB 저장 실패: ' + err.message });
+          playBeep();
+        }
+      })();
     };
 
     this.mediaRecorder.onerror = (e) => {
-      this.onEvent('error', { message: '녹음 오류: ' + e.error?.message });
+      this.onEvent('error', { message: '녹음 오류: ' + (e.error?.message ?? 'unknown') });
       playBeep();
     };
 
@@ -120,11 +133,13 @@ export class Recorder {
   }
 
   async stop() {
+    if (!this.mediaRecorder) return Promise.resolve(null);
     this._teardown();
     return new Promise((resolve) => {
       this.mediaRecorder.onstop = async () => {
+        await this._lastSave;
         const chunks = await getAllChunks(this.db);
-        const blob = new Blob(chunks.map((c) => c.blob), { type: 'audio/webm' });
+        const blob = new Blob(chunks.map((c) => c.blob), { type: this.mimeType });
         this.onEvent('stop', { totalBytes: this.totalBytes, chunkCount: this.chunkCount });
         resolve(blob);
       };
