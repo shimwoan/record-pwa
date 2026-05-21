@@ -18,7 +18,7 @@ async function saveChunk(db, blob) {
     const tx = db.transaction(STORE, 'readwrite');
     const store = tx.objectStore(STORE);
     const req = store.add({ blob, timestamp: Date.now(), size: blob.size });
-    req.onsuccess = () => resolve(req.result); // key
+    req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
@@ -44,8 +44,10 @@ async function clearChunks(db) {
 // AudioContext — iOS는 사용자 탭 시점에 생성해야 함
 let audioCtx = null;
 
-export async function initAudioContext() {
-  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+// [Critical Fix #3] AudioContext는 user gesture frame 안에서 생성/resume해야 함.
+// await 이후에는 iOS 제스처 타이머가 만료되므로 App.jsx handleStart에서 직접 호출.
+export function initAudioContext() {
+  if (audioCtx && audioCtx.state !== 'closed') return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   // iOS 허용 등록용 무음 재생
   const buf = audioCtx.createBuffer(1, 1, 22050);
@@ -53,8 +55,9 @@ export async function initAudioContext() {
   src.buffer = buf;
   src.connect(audioCtx.destination);
   src.start(0);
+  // resume()도 gesture frame 안에서 동기적으로 호출
   if (audioCtx.state === 'suspended') {
-    await audioCtx.resume();
+    audioCtx.resume();
   }
 }
 
@@ -76,7 +79,6 @@ export function playBeep() {
 
 export class Recorder {
   constructor(onEvent) {
-    // onEvent(type, payload) — App에서 상태 업데이트에 사용
     this.onEvent = onEvent ?? (() => {});
     this.db = null;
     this.mediaRecorder = null;
@@ -92,12 +94,13 @@ export class Recorder {
   async start() {
     if (this.mediaRecorder) throw new Error('Already recording');
 
+    // [Critical Fix #3] initAudioContext()는 App.jsx에서 gesture frame 안에서 이미 호출됨.
+    // 여기서 중복 호출 제거.
+
     this.db = await openDB();
     await clearChunks(this.db);
     this.chunkCount = 0;
     this.totalBytes = 0;
-
-    await initAudioContext();
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -105,9 +108,10 @@ export class Recorder {
       : 'audio/mp4';
     this.mediaRecorder = new MediaRecorder(stream, { mimeType: this.mimeType });
 
-    this.mediaRecorder.ondataavailable = async (e) => {
+    // [Critical Fix #2] _lastSave를 체인으로 직렬화하여 concurrent chunk 저장 경쟁 방지
+    this.mediaRecorder.ondataavailable = (e) => {
       if (e.data.size === 0) return;
-      this._lastSave = (async () => {
+      this._lastSave = this._lastSave.then(async () => {
         try {
           await saveChunk(this.db, e.data);
           this.chunkCount++;
@@ -117,7 +121,7 @@ export class Recorder {
           this.onEvent('error', { message: 'IndexedDB 저장 실패: ' + err.message });
           playBeep();
         }
-      })();
+      });
     };
 
     this.mediaRecorder.onerror = (e) => {
@@ -134,12 +138,33 @@ export class Recorder {
 
   async stop() {
     if (!this.mediaRecorder) return Promise.resolve(null);
-    this._teardown();
+
+    // [Critical Fix #1] 트랙 중단 전에 mediaRecorder.stop() 먼저 호출해야
+    // 마지막 ondataavailable이 정상 발생함. 트랙을 먼저 죽이면 마지막 청크 유실 위험.
+    // 순서: listener 해제 → wakelock 해제 → mediaRecorder.stop() → (onstop 내에서) 트랙 중단
+
+    if (this._visibilityHandler) {
+      document.removeEventListener('visibilitychange', this._visibilityHandler);
+      this._visibilityHandler = null;
+    }
+    if (this.wakeLock) {
+      this.wakeLock.removeEventListener('release', this._wakeLockReleaseHandler);
+      this._wakeLockReleaseHandler = null;
+      this.wakeLock.release();
+      this.wakeLock = null;
+    }
+
+    const stream = this.mediaRecorder.stream;
+    const mimeType = this.mimeType;
+
     return new Promise((resolve) => {
       this.mediaRecorder.onstop = async () => {
+        // 모든 청크 저장이 완료될 때까지 대기
         await this._lastSave;
+        // 이제 트랙 중단 (마지막 청크 flush 완료 후)
+        stream.getTracks().forEach((t) => t.stop());
         const chunks = await getAllChunks(this.db);
-        const blob = new Blob(chunks.map((c) => c.blob), { type: this.mimeType });
+        const blob = new Blob(chunks.map((c) => c.blob), { type: mimeType });
         this.onEvent('stop', { totalBytes: this.totalBytes, chunkCount: this.chunkCount });
         resolve(blob);
       };
@@ -173,29 +198,15 @@ export class Recorder {
         playBeep();
       } else {
         this.onEvent('visibility', { state: 'visible' });
-        // Wake Lock 재획득
+        // [Important Fix #4] Wake Lock 재획득 성공 여부 확인 후에만 이벤트 발생
         if (!this.wakeLock && 'wakeLock' in navigator) {
           await this._acquireWakeLock();
-          this.onEvent('wakeLockReacquired', {});
+          if (this.wakeLock) {
+            this.onEvent('wakeLockReacquired', {});
+          }
         }
       }
     };
     document.addEventListener('visibilitychange', this._visibilityHandler);
-  }
-
-  _teardown() {
-    if (this._visibilityHandler) {
-      document.removeEventListener('visibilitychange', this._visibilityHandler);
-      this._visibilityHandler = null;
-    }
-    if (this.wakeLock) {
-      this.wakeLock.removeEventListener('release', this._wakeLockReleaseHandler);
-      this._wakeLockReleaseHandler = null;
-      this.wakeLock.release();
-      this.wakeLock = null;
-    }
-    if (this.mediaRecorder?.stream) {
-      this.mediaRecorder.stream.getTracks().forEach((t) => t.stop());
-    }
   }
 }
