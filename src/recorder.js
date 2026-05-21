@@ -174,6 +174,8 @@ export class Recorder {
       this._visibilityHandler = null;
     }
     if (this.wakeLock) {
+      this.wakeLock.removeEventListener('release', this._wakeLockReleaseHandler);
+      this._wakeLockReleaseHandler = null;
       this.wakeLock.release();
       this.wakeLock = null;
     }
