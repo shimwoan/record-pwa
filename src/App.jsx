@@ -31,9 +31,11 @@ export default function App() {
     visibility: 'visible',
   });
   const recorderRef = useRef(null);
+  const eventIdRef = useRef(0);
 
   const addEvent = useCallback((text, error = false) => {
-    setEvents((prev) => [...prev, { text: `[${fmtTime()}] ${text}`, error }]);
+    const id = ++eventIdRef.current;
+    setEvents((prev) => [...prev, { id, text: `[${fmtTime()}] ${text}`, error }]);
   }, []);
 
   const handleEvent = useCallback((type, payload) => {

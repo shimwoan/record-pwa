@@ -12,8 +12,8 @@ export default function EventLog({ events }) {
       display: 'flex',
       flexDirection: 'column-reverse',
     }}>
-      {[...events].reverse().map((e, i) => (
-        <div key={i} style={{ color: e.error ? '#ff4444' : '#00ff00', marginBottom: '2px' }}>
+      {[...events].reverse().map((e) => (
+        <div key={e.id} style={{ color: e.error ? '#ff4444' : '#00ff00', marginBottom: '2px' }}>
           {e.text}
         </div>
       ))}

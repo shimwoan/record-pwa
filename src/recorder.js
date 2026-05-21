@@ -64,7 +64,7 @@ export function initAudioContext() {
 export function playBeep() {
   if (!audioCtx) return;
   const gain = audioCtx.createGain();
-  gain.gain.value = 0.4;
+  gain.gain.value = 0.8;
   gain.connect(audioCtx.destination);
 
   [880, 1760].forEach((freq) => {
