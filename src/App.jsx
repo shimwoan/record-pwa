@@ -86,6 +86,21 @@ export default function App() {
     // [Critical Fix #3] iOS: AudioContext는 user gesture frame 안에서 동기적으로 생성해야 함.
     // await 이전에 호출해야 gesture 타이머 만료 전에 unlock됨.
     initAudioContext();
+    // 마이크 권한 팝업을 먼저 띄움 — 허용하면 recorder.start()에서 재사용됨
+    try {
+      const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      testStream.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        addEvent('마이크 권한이 거부되었습니다', true);
+        addEvent('iPhone 설정 → Safari → 마이크 → 허용 후 다시 시도', true);
+      } else if (err.name === 'NotFoundError') {
+        addEvent('마이크를 찾을 수 없습니다', true);
+      } else {
+        addEvent('마이크 오류: ' + err.message, true);
+      }
+      return;
+    }
     try {
       setEvents([]);
       setStatus((s) => ({ ...s, chunkCount: 0, totalBytes: 0 }));
